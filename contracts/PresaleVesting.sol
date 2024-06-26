@@ -14,7 +14,11 @@ interface IERC20 {
      * @dev Emitted when the allowance of a `spender` for an `owner` is set by
      * a call to {approve}. `value` is the new allowance.
      */
-    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Approval(
+        address indexed owner,
+        address indexed spender,
+        uint256 value
+    );
 
     /**
      * @dev Returns the value of tokens in existence.
@@ -42,7 +46,10 @@ interface IERC20 {
      *
      * This value changes when {approve} or {transferFrom} are called.
      */
-    function allowance(address owner, address spender) external view returns (uint256);
+    function allowance(address owner, address spender)
+        external
+        view
+        returns (uint256);
 
     /**
      * @dev Sets a `value` amount of tokens as the allowance of `spender` over the
@@ -70,7 +77,11 @@ interface IERC20 {
      *
      * Emits a {Transfer} event.
      */
-    function transferFrom(address from, address to, uint256 value) external returns (bool);
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external returns (bool);
 }
 
 abstract contract Context {
@@ -100,7 +111,10 @@ abstract contract Ownable is Context {
      */
     error OwnableInvalidOwner(address owner);
 
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
 
     /**
      * @dev Initializes the contract setting the address provided by the deployer as the initial owner.
@@ -213,170 +227,258 @@ abstract contract ReentrancyGuard {
 }
 
 contract PreSaleVesting is Ownable, ReentrancyGuard {
+    // Token Address values
+    IERC20 public immutable GVVToken;
+    IERC20 public immutable USDT;
 
-    // Token Valus
-    IERC20 public immutable GVVToken;  // GVV address
-    IERC20 public immutable USDT; // USDT address 0x16cAB3aEFFCFfd0195A961ddeF5BA70dAb3ff0Bd
-    
-    // Wallet Values
-    address private fundsWallet; // 0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199
-    uint256 public _totalUSDTInvestment = 0;
+    // Funds wallet
+    address payable private fundsWallet; // 0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199
 
-    // Puase and Start the Presale system
-    bool public _paused = true;
+    // Presale Token Amount limits
+    uint256[] public tokenLimsts = [20000000, 80000000, 150000000];
 
-    mapping(address => mapping (uint256 => uint256))[] _amountToBeClaimed;
-    mapping(address => uint256) _buyDate;
+    // Presale token sold amounts
+    uint256[] public TokenSoldAmount = [0, 0, 0];
 
-    uint256[] public tokenSold = [
-        0, //TokenSold initially should be zero on Priavet Round stage1
-        0, //TokenSold initially should be zero on Priavet Round stage1
-        0  //TokenSold initially should be zero on Public Round
-    ];
-
+    // Presale rounds prices
     uint256[] public tokenPricePerRound = [
         230000, //Private Round Stage 1 0.23 USDT
         340000, //Private Round Stage 2 0.34 USDT
         450000 //Public Round 0.45 USDT
     ];
 
-    uint256[] public tokenLimitPerRound = [
-        20000000,
-        80000000,
-        150000000
-    ];
+    // Puase and Start the Presale system
+    bool public _paused = true;
 
+    // Staking Data
     struct Buyer {
-        uint256 totalAmount;
-        uint256 vestingStartMonth;
-        uint256 cliffMonth;
-        mapping(uint256 => uint256) remainingVestingAmount; // Mapping to track remaining vesting amounts per month
+        uint256 tokenAmount;
+        uint256 buy_date;
+        uint256 last_claim_date;
     }
 
-    mapping(address => Buyer) public buyers;
+    mapping(address => mapping(uint256 => Buyer)) public buyers;
 
-    uint256 public buyersCount;
-
-    event TransferUSDT(address indexed fromAddress, address indexed toAddress, uint256 amount);
-
-    event TransferGVVToken(address indexed fromAddress, address indexed toAddress, uint256 amount, uint256 date);
+    event TransferUSDT(
+        address indexed fromAddress,
+        address indexed toAddress,
+        uint256 amount
+    );
 
     event Withdraw(address indexed fundswallet, uint256 amountOfUSDT);
 
-    constructor(address initialOwner, address _gvvTokenAddress, address _USDTTokenAddress, address _fundsWallet) Ownable (initialOwner) {
-        GVVToken = IERC20(_gvvTokenAddress);
-        USDT = IERC20(_USDTTokenAddress);
-        fundsWallet = _fundsWallet;
+    event TransferGVVToken(
+        address indexed fromAddress,
+        address indexed toAddress,
+        uint256 amount,
+        uint256 date
+    );
+
+    constructor(address _gvvToken, address _usdt) Ownable(msg.sender) {
+        GVVToken = IERC20(_gvvToken);
+        USDT = IERC20(_usdt);
     }
 
-    // check system paused or not
-    modifier whenNotPaused() {
-        require(!_paused, "Contract is paused");
-        _;
+    ///////////////////////////
+    // setting functions by onwer 0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db
+    /////////////////////////// 
+    function setFundsWallet(address _newAddr) external onlyOwner {
+        fundsWallet = payable(_newAddr);
     }
-    
+
     // toggle pause and start the system
     function ToggleemergencyPause() external onlyOwner {
         _paused = !_paused;
     }
 
-
     function startPresale() external onlyOwner {
         _paused = false;
     }
 
-    function SetFundsWallet(address _newFundsWallet) external onlyOwner {
-        fundsWallet = _newFundsWallet;
+    ///////////////////////////
+    // Modifiers
+    ///////////////////////////
+    // check system paused or not
+    modifier whenNotPaused() {
+        require(!_paused, "Contract is paused");
+        _;
     }
 
-    // Set Token Limit values
-    // 0: privatesale round stage 1
-    // 1: privatesale round stage 2
-    // 2: publicsale round
-    function setTokenLimits(uint256 _periodNum, uint256 _newLimits) onlyOwner external {
-        require(_periodNum < 3 ,"Invalid _periods");
-        require(_periodNum >= 0 ,"Invalid _periods");
-        tokenLimitPerRound[_periodNum] = _newLimits;
-    }
+    ///////////////////////////
+    // Functions for users
+    ///////////////////////////
+    function buyTokensByUSDT(uint256 _amount, uint256 round)
+        external
+        nonReentrant
+        whenNotPaused
+    {
+        require(
+            TokenSoldAmount[round] + _amount <= tokenLimsts[round],
+            "Token is already sold out !"
+        );
+        require(_amount > 0, "amount should be more than 0");
 
-    function setTokenPricePerRound(uint256 _periodNum, uint256 _newPrice) onlyOwner external {
-        require(_periodNum < 3 ,"Invalid _periods");
-        require(_periodNum >= 0 ,"Invalid _periods");
-        tokenPricePerRound[_periodNum] = _newPrice;
-    }
+        uint256 USDT_costs = _amount * tokenPricePerRound[round];
 
-    function buyTokens(uint256 quantity, uint256 round) external nonReentrant whenNotPaused {
-        require(tokenSold[round] < tokenLimitPerRound[round], "Presale has ended");
-        require(quantity > 0, "Quantity should be more than 0");
-
-        uint256 amount = (quantity * tokenPricePerRound[round]); // e.g. quantity = 300, tokePrice = 230000, amount = 69000000 // $69 USDT
-        require(amount >= 10 * (10 ** 6), "Minimum amount"); // Minimum price should be $10 USDT
-        
-        uint256 buyerBlance = USDT.balanceOf(msg.sender);  // e.g. My balance is $880 USDT. buyerBalance should be 880 000 000
-        require(buyerBlance >= amount, "Not enough blance");
-        
         uint256 allowance = USDT.allowance(msg.sender, address(this));
-        require(allowance >= amount, "Allowance should be greater or equals to amount");
-        require(tokenSold[round] + quantity <= tokenLimitPerRound[round], "Tokens can be sold in this round is limited");
-        
-        USDT.transferFrom(msg.sender, address(this), amount);
+        require(
+            allowance >= USDT_costs,
+            "Allowance should be greater or equals to amount"
+        );
 
-        tokenSold[round] += quantity;
+        // Transfer USDT to this address
+        USDT.transferFrom(msg.sender, address(this), USDT_costs);
+        USDT.transfer(fundsWallet, USDT_costs);
 
-        _totalUSDTInvestment += amount;
-
-        // Increment the buyersCount when a new buyer purchases tokens
-        if (buyers[msg.sender].totalAmount == 0) {
-            buyersCount++;
-        }
-
-        uint256 currentMonth = getCurrentMonth();
+        // Token sold plus
+        TokenSoldAmount[round] += _amount;
 
         // Store buyer information and vesting details
-        buyers[msg.sender].totalAmount += quantity;
-        buyers[msg.sender].vestingStartMonth = currentMonth;
-        buyers[msg.sender].cliffMonth = currentMonth + 4; // Cliff of 4 months
+        buyers[msg.sender][round].tokenAmount += _amount;
+        buyers[msg.sender][round].buy_date = block.timestamp;
+        buyers[msg.sender][round].last_claim_date = block.timestamp;
 
-        // Calculate token vesting details
-        for (uint i = 0; i < 10; i++) {
-            uint256 vestingAmount = quantity / 10;
-            buyers[msg.sender].remainingVestingAmount[currentMonth + i + 4] += vestingAmount;
-        }
-
-        _buyDate[msg.sender] = currentMonth;
-
-        // USDT.transfer(fundsWallet, amount);
-        emit TransferUSDT(msg.sender, address(this), amount);
-        // tokenVesting(quantity);
+        emit TransferUSDT(msg.sender, address(this), USDT_costs);
     }
 
-    function claimToken() external nonReentrant whenNotPaused {
-        uint256 currentMonth = getCurrentMonth();
-        uint256 totalClaimableAmount = 0;
 
-        for (uint i = buyers[msg.sender].vestingStartMonth; i < currentMonth; i++) {
-            uint256 vestingAmount = buyers[msg.sender].remainingVestingAmount[i];
-            require(vestingAmount > 0, "Nothing to claim this month");
+    ///////////////////////////
+    // Functions for users
+    ///////////////////////////
+    function buyTokensByNativeCoin(uint256 _amount, uint256 round)
+        external
+        payable
+        nonReentrant
+        whenNotPaused
+    {
+        require(
+            TokenSoldAmount[round] + _amount <= tokenLimsts[round],
+            "Token is already sold out !"
+        );
+        require(_amount > 0, "amount should be more than 0");
 
-            totalClaimableAmount += vestingAmount;
-            buyers[msg.sender].remainingVestingAmount[i] = 0;
-        }
+        require(msg.value > 0, "Value must be greater thatn 0");
 
-        require(currentMonth >= buyers[msg.sender].cliffMonth, "Cliff period not reached");
+        fundsWallet.transfer(msg.value);
+ 
+        // Token sold plus
+        TokenSoldAmount[round] += _amount;
 
-        IERC20(GVVToken).transfer(msg.sender, totalClaimableAmount);
+        // Store buyer information and vesting details
+        buyers[msg.sender][round].tokenAmount += _amount;
+        buyers[msg.sender][round].buy_date = block.timestamp;
+        buyers[msg.sender][round].last_claim_date = block.timestamp;
+
+        emit TransferUSDT(msg.sender, address(this), msg.value);
     }
 
-    function getCurrentMonth() public view returns (uint256) {
-        // return block.timestamp / (30 * 24 * 60 * 60);
-        return block.timestamp / (60);
+    receive() external payable {}
+
+    function getUserBuyDate(address _user, uint256 _roundNum)
+        external
+        view
+        returns (uint256)
+    {
+        return buyers[_user][_roundNum].buy_date;
+    }
+
+    function getUserBuyAmount(address _user, uint256 _roundNum)
+        external
+        view
+        returns (uint256)
+    {
+        return buyers[_user][_roundNum].tokenAmount;
+    }
+
+    function getClaimableAmount(uint256 _roundNum) external view returns (uint256) {
+        uint256 last_claim_date = buyers[msg.sender][_roundNum].last_claim_date;
+        uint256 deltaMonths = getDeltaMonth(last_claim_date);
+        uint256 payoutAmount = 0;
+
+        if (_roundNum == 0) {
+            // Private sale stage 1
+            require(deltaMonths > 4, "Cliff period not reached");
+            uint256 available_claim_amount = (buyers[msg.sender][_roundNum]
+                .tokenAmount * 10) / 100; // 10% of bought token amount
+
+            // calculate the number of months to pay out
+            uint256 monthsToPayout = deltaMonths - 4;
+            if (monthsToPayout > 0) {
+                payoutAmount = available_claim_amount * monthsToPayout;
+            }
+        } else if (_roundNum == 1) {
+            require(deltaMonths > 4, "Cliff period not reached");
+            uint256 available_claim_amount = (buyers[msg.sender][_roundNum]
+                .tokenAmount * 40) / 100; // 40% of bought token amount
+
+            // Calculate the number of months to pay out
+            uint256 monthsToPayout = deltaMonths - 4;
+            if (monthsToPayout > 0) {
+                payoutAmount = available_claim_amount * monthsToPayout;
+            }
+        } else {
+            // Public Sale Round
+            uint256 available_claim_amount = (buyers[msg.sender][_roundNum]
+                .tokenAmount * 75) / 100; // 75% of bought token amount
+            payoutAmount = available_claim_amount;
+        }
+
+        return payoutAmount;
+    }
+
+    function claimToken(uint256 _roundNum) external nonReentrant whenNotPaused {
+        uint256 last_claim_date = buyers[msg.sender][_roundNum].last_claim_date;
+        uint256 deltaMonths = getDeltaMonth(last_claim_date);
+
+        if (_roundNum == 0) {
+            // Private sale stage 1
+            require(deltaMonths > 4, "Cliff period not reached");
+            uint256 available_claim_amount = (buyers[msg.sender][_roundNum]
+                .tokenAmount * 10) / 100; // 10% of bought token amount
+
+            // calculate the number of months to pay out
+            uint256 monthsToPayout = deltaMonths - 4;
+            if (monthsToPayout > 0) {
+                uint256 payoutAmount = available_claim_amount * monthsToPayout;
+                GVVToken.transfer(msg.sender, payoutAmount);
+                emit TransferGVVToken(address(this), msg.sender, payoutAmount, block.timestamp);
+            }
+        } else if (_roundNum == 1) {
+            require(deltaMonths > 4, "Cliff period not reached");
+            uint256 available_claim_amount = (buyers[msg.sender][_roundNum]
+                .tokenAmount * 40) / 100; // 40% of bought token amount
+
+            // Calculate the number of months to pay out
+            uint256 monthsToPayout = deltaMonths - 4;
+            if (monthsToPayout > 0) {
+                uint256 payoutAmount = available_claim_amount * monthsToPayout;
+                GVVToken.transfer(msg.sender, payoutAmount);
+                emit TransferGVVToken(address(this), msg.sender, payoutAmount, block.timestamp);
+            }
+        } else {
+            // Public Sale Round
+            uint256 available_claim_amount = (buyers[msg.sender][_roundNum]
+                .tokenAmount * 75) / 100; // 75% of bought token amount
+            uint256 payoutAmount = available_claim_amount;
+            GVVToken.transfer(msg.sender, payoutAmount);
+            emit TransferGVVToken(address(this), msg.sender, payoutAmount, block.timestamp);
+        }
+
+        // Update the buy date to prevent claiming more than once per month
+        buyers[msg.sender][_roundNum].last_claim_date = block.timestamp + 30 days; // Set the next claim date to be one month from the current claim
+    }
+
+    function getDeltaMonth(uint256 _buyDate) public view returns (uint256) {
+        uint256 deltaMonths = (block.timestamp - _buyDate) /
+            (30 * 24 * 60 * 60);
+        return deltaMonths;
     }
 
     function withdraw() public onlyOwner returns (bool) {
+        uint256 _totalUSDTInvestment = GVVToken.balanceOf(address(this));
         require(_totalUSDTInvestment > 0, "Insufficent Balance");
 
         USDT.transfer(fundsWallet, _totalUSDTInvestment);
-        _totalUSDTInvestment = 0;
 
         emit Withdraw(fundsWallet, _totalUSDTInvestment);
         return true;
